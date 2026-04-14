@@ -34,6 +34,7 @@ def tinh_thue_luy_tien_nam(thu_nhap_tinh_thue):
 st.set_page_config(page_title="Quyết Toán Thuế TNCN", page_icon="💰",layout="centered")
 
 st.title("💰 App Quyết Toán Thuế TNCN")
+st.text("hungpq7")
 st.write("Nhập thông tin để tính số thuế phải nộp / hoàn lại")
 
 # Input
