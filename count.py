@@ -6,9 +6,17 @@ from io import BytesIO
 
 # ================= CONFIG =================
 
-MAPPING_URL = "https://docs.google.com/spreadsheets/d/1psWXuucE_IX_JBi5iG_m96sKuvY5xzEXYLU5BE7ug7w/export?format=csv"
+def load_mapping():
+    url = "https://docs.google.com/spreadsheets/d/1psWXuucE_IX_JBi5iG_m96sKuvY5xzEXYLU5BE7ug7w/gviz/tq?tqx=out:csv"
+    try:
+        df = pd.read_csv(url)
+        df.columns = df.columns.str.strip().str.lower()
+        return df
+    except:
+        st.warning("Mapping sheet not loaded → using empty mapping")
+        return pd.DataFrame(columns=["code", "name"])
 
-mapping_df = pd.read_csv(MAPPING_URL)
+mapping_df = load_mapping()
 mapping_df.columns = mapping_df.columns.str.strip().str.lower()
 MODULE_MAP = dict(zip(mapping_df["code"], mapping_df["name"]))
 
@@ -38,11 +46,10 @@ def clean_data(df):
 
     df.columns = df.columns.str.strip().str.lower()
 
-    # issue filter
     if "issue type" in df.columns:
         df = df[df["issue type"].astype(str).str.lower().str.contains("bug|defect", na=False)]
 
-    # ================= MODULE DETECTION =================
+    # module detection
     if "epic name" in df.columns:
         df["module"] = df["epic name"]
     elif "parent summary" in df.columns:
@@ -52,10 +59,8 @@ def clean_data(df):
     else:
         df["module"] = df.get("parent", pd.NA)
 
-    # ================= KEEP REAL NaN =================
     df["module"] = df["module"].replace(["nan", "None", ""], pd.NA)
 
-    # ================= MAP MODULE =================
     def map_module(x):
         if pd.isna(x):
             return "No Epic"
@@ -64,10 +69,8 @@ def clean_data(df):
 
     df["module"] = df["module"].apply(map_module)
 
-    # ================= STATUS =================
     df["status"] = df["status"].fillna("Unknown").astype(str).str.strip()
 
-    # ================= PRIORITY =================
     df["priority"] = df["priority"].fillna("Unknown")
     df["priority_norm"] = (
         df["priority"]
@@ -91,7 +94,6 @@ def build_summary(df):
     summary = summary.rename(columns={"module": "Module (Epic)"})
     summary = capitalize_columns(summary)
 
-    # ===== TOTAL ROW =====
     total_row = summary.select_dtypes(include="number").sum()
     total_row["Module (Epic)"] = "TOTAL"
 
@@ -116,7 +118,6 @@ def build_classification(df):
     cls = cls.rename(columns={"module": "Module (Epic)"})
     cls = capitalize_columns(cls)
 
-    # ===== TOTAL ROW =====
     total_row = cls.select_dtypes(include="number").sum()
     total_row["Module (Epic)"] = "TOTAL"
 
@@ -134,7 +135,7 @@ def to_excel(summary, cls):
     return output.getvalue()
 
 
-# ================= STREAMLIT UI =================
+# ================= STREAMLIT =================
 st.set_page_config(page_title="Jira Bugs Report Dashboard", layout="wide")
 st.title("📊 Jira Bugs Report Dashboard")
 
@@ -145,7 +146,7 @@ if file:
     df = pd.read_excel(file)
     df = clean_data(df)
 
-    # ================= FILTER (SAFE NaN HANDLING) =================
+    # ================= FILTER UI =================
     col1, col2, col3 = st.columns(3)
 
     with col1:
@@ -158,6 +159,35 @@ if file:
     with col3:
         priority_filter = st.multiselect("Priority", sorted(df["priority_norm"].dropna().unique()))
 
+    # ================= ENV FILTER =================
+    env_options = st.multiselect(
+        "Environment",
+        ["Overall", "UAT", "STG", "PILOT"],
+        default=["Overall"]
+    )
+
+    UAT_STATUS = [
+        "To Do", "IN DEV", "Deploy UAT", "UAT FPT Testing", "UAT HDB Testing"
+    ]
+
+    STG_STATUS = [
+        "Deploy STG", "STG FPT Testing", "STG HDB Testing"
+    ]
+
+    PILOT_STATUS = [
+        "Deploy Pilot", "PILOT FPT Testing", "PILOT HDB Testing"
+    ]
+
+    env_status_filter = []
+
+    if "UAT" in env_options:
+        env_status_filter += UAT_STATUS
+    if "STG" in env_options:
+        env_status_filter += STG_STATUS
+    if "PILOT" in env_options:
+        env_status_filter += PILOT_STATUS
+
+    # ================= APPLY FILTER =================
     filtered = df.copy()
 
     if module_filter:
@@ -167,46 +197,70 @@ if file:
     if priority_filter:
         filtered = filtered[filtered["priority_norm"].isin(priority_filter)]
 
+    if "Overall" not in env_options:
+        filtered = filtered[filtered["status"].isin(env_status_filter)]
+
     # ================= BUILD =================
     summary = build_summary(filtered)
     cls = build_classification(filtered)
 
     summary_chart = summary[summary["Module (Epic)"] != "TOTAL"]
 
-    # ================= KPI =================
+    # ================= OVERVIEW =================
     st.subheader("📌 Overview")
 
-    k1, k2, k3 = st.columns(3)
+    k1, k2, k3, k4 = st.columns(4)
     k1.metric("Total Bugs", len(filtered))
     k2.metric("Modules", filtered["module"].nunique())
     k3.metric("Statuses", filtered["status"].nunique())
+    k4.metric("In Progress", len(filtered[~filtered["status"].isin(["Done", "Cancel", "Pending"])]))
 
-    # ================= RAW DATA =================
+    # ================= RAW DATA (NEW) =================
     st.subheader("📌 Raw Data")
 
-    filtered_display = filtered.reset_index(drop=True)
-    filtered_display.insert(0, "No.", filtered_display.index + 1)
+    raw_display = filtered.copy().reset_index(drop=True)
+    raw_display.insert(0, "No.", range(1, len(raw_display) + 1))
 
-    st.dataframe(filtered_display, use_container_width=True, hide_index=True)
+    raw_display = raw_display.rename(columns={
+        "module": "Module (Epic)",
+        "status": "Status",
+        "priority_norm": "Priority",
+        "summary": "Title",
+        "assignee": "Assignee"
+    })
 
-    # ================= SUMMARY =================
-    st.subheader("📊 Summary")
+    preferred_cols = [
+        "No.",
+        "Module (Epic)",
+        "Status",
+        "Priority",
+        "Title",
+        "Assignee"
+    ]
+
+    existing_cols = [c for c in preferred_cols if c in raw_display.columns]
+
+    raw_display = raw_display[existing_cols + [
+        c for c in raw_display.columns if c not in existing_cols
+    ]]
+
+    st.dataframe(raw_display, use_container_width=True, hide_index=True)
+
+    # ================= OVERALL =================
+    st.subheader("🟦 OVERALL - Summary")
 
     summary_display = summary.copy()
     summary_display.insert(0, "No.", range(1, len(summary_display) + 1))
-
     st.dataframe(summary_display, use_container_width=True, hide_index=True)
 
-    # ================= CLASSIFICATION =================
-    st.subheader("📊 Classification")
+    st.subheader("🟦 OVERALL - Classification")
 
     cls_display = cls.copy()
     cls_display.insert(0, "No.", range(1, len(cls_display) + 1))
-
     st.dataframe(cls_display, use_container_width=True, hide_index=True)
 
     # ================= CHARTS =================
-    st.subheader("📈 Charts")
+    st.subheader("🟦 OVERALL - Charts")
 
     c1, c2 = st.columns(2)
 
@@ -215,7 +269,7 @@ if file:
             summary_chart,
             x="Module (Epic)",
             y="Total Bugs",
-            title="Total Bugs per Module",
+            title="Overall Bugs per Module",
             color="Total Bugs",
             color_continuous_scale="Reds"
         )
@@ -234,7 +288,7 @@ if file:
             status_flow,
             x="Count",
             y="Status",
-            title="Bug Flow (To Do → Done)",
+            title="Overall Bug Flow",
             color="Status"
         )
         st.plotly_chart(fig2, use_container_width=True)
