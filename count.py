@@ -7,6 +7,7 @@ from io import BytesIO
 # ================= CONFIG =================
 
 MAPPING_URL = "https://docs.google.com/spreadsheets/d/1psWXuucE_IX_JBi5iG_m96sKuvY5xzEXYLU5BE7ug7w/export?format=csv"
+
 mapping_df = pd.read_csv(MAPPING_URL)
 mapping_df.columns = mapping_df.columns.str.strip().str.lower()
 MODULE_MAP = dict(zip(mapping_df["code"], mapping_df["name"]))
@@ -31,20 +32,17 @@ def capitalize_columns(df):
     df.columns = [col.strip().title() for col in df.columns]
     return df
 
-def highlight_total(row):
-    if row.get("Module (Epic)") == "TOTAL":
-        return ["background-color: #ffeeba; font-weight: bold"] * len(row)
-    return [""] * len(row)
 
 # ================= CLEAN DATA =================
 def clean_data(df):
 
     df.columns = df.columns.str.strip().str.lower()
 
-    issue_col = "issue type" if "issue type" in df.columns else None
-    if issue_col:
-        df = df[df[issue_col].astype(str).str.lower().str.contains("bug|defect", na=False)]
+    # issue filter
+    if "issue type" in df.columns:
+        df = df[df["issue type"].astype(str).str.lower().str.contains("bug|defect", na=False)]
 
+    # ================= MODULE DETECTION =================
     if "epic name" in df.columns:
         df["module"] = df["epic name"]
     elif "parent summary" in df.columns:
@@ -52,21 +50,35 @@ def clean_data(df):
     elif "epic link" in df.columns:
         df["module"] = df["epic link"]
     else:
-        df["module"] = df.get("parent", "Unknown")
+        df["module"] = df.get("parent", pd.NA)
 
-    df["module"] = df["module"].astype(str).str.strip().str.upper()
-    df["module"] = df["module"].apply(
-        lambda x: f"{x} - {MODULE_MAP[x]}" if x in MODULE_MAP else x
-    )
+    # ================= KEEP REAL NaN =================
+    df["module"] = df["module"].replace(["nan", "None", ""], pd.NA)
 
+    # ================= MAP MODULE =================
+    def map_module(x):
+        if pd.isna(x):
+            return "No Epic"
+        x = str(x).strip().upper()
+        return f"{x} - {MODULE_MAP[x]}" if x in MODULE_MAP else x
+
+    df["module"] = df["module"].apply(map_module)
+
+    # ================= STATUS =================
     df["status"] = df["status"].fillna("Unknown").astype(str).str.strip()
 
+    # ================= PRIORITY =================
     df["priority"] = df["priority"].fillna("Unknown")
     df["priority_norm"] = (
-        df["priority"].astype(str).str.lower().map(PRIORITY_MAP).fillna("Other")
+        df["priority"]
+        .astype(str)
+        .str.lower()
+        .map(PRIORITY_MAP)
+        .fillna("Other")
     )
 
     return df
+
 
 # ================= SUMMARY =================
 def build_summary(df):
@@ -79,13 +91,14 @@ def build_summary(df):
     summary = summary.rename(columns={"module": "Module (Epic)"})
     summary = capitalize_columns(summary)
 
-    # ===== ADD TOTAL ROW =====
+    # ===== TOTAL ROW =====
     total_row = summary.select_dtypes(include="number").sum()
     total_row["Module (Epic)"] = "TOTAL"
 
     summary = pd.concat([summary, pd.DataFrame([total_row])], ignore_index=True)
 
     return summary
+
 
 # ================= CLASSIFICATION =================
 def build_classification(df):
@@ -100,21 +113,17 @@ def build_classification(df):
 
     cls = cls[["Total Bugs", "Highest", "High", "Medium", "Low", "Lowest"]].reset_index()
 
-    cls = cls.rename(columns={
-        "module": "Module (Epic)",
-        "Highest": "Critical",
-        "Lowest": "Trivial"
-    })
-
+    cls = cls.rename(columns={"module": "Module (Epic)"})
     cls = capitalize_columns(cls)
 
-    # ===== ADD TOTAL ROW =====
+    # ===== TOTAL ROW =====
     total_row = cls.select_dtypes(include="number").sum()
     total_row["Module (Epic)"] = "TOTAL"
 
     cls = pd.concat([cls, pd.DataFrame([total_row])], ignore_index=True)
 
     return cls
+
 
 # ================= EXCEL EXPORT =================
 def to_excel(summary, cls):
@@ -124,33 +133,33 @@ def to_excel(summary, cls):
         cls.to_excel(writer, sheet_name="Classification", index=False)
     return output.getvalue()
 
-# ================= UI =================
+
+# ================= STREAMLIT UI =================
 st.set_page_config(page_title="Jira Bugs Report Dashboard", layout="wide")
 st.title("📊 Jira Bugs Report Dashboard")
 
 file = st.file_uploader("Upload Excel file", type=["xlsx"])
 
 if file:
+
     df = pd.read_excel(file)
     df = clean_data(df)
 
+    # ================= FILTER (SAFE NaN HANDLING) =================
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        module_list = (
-            df["module"]
-            .dropna()
-            .astype(str)
-            .sort_values()
-            .unique()
-        )
+        module_list = sorted(df["module"].dropna().unique())
         module_filter = st.multiselect("Module", module_list)
+
     with col2:
-        status_filter = st.multiselect("Status", sorted(df["status"].unique()))
+        status_filter = st.multiselect("Status", sorted(df["status"].dropna().unique()))
+
     with col3:
-        priority_filter = st.multiselect("Priority", sorted(df["priority_norm"].unique()))
+        priority_filter = st.multiselect("Priority", sorted(df["priority_norm"].dropna().unique()))
 
     filtered = df.copy()
+
     if module_filter:
         filtered = filtered[filtered["module"].isin(module_filter)]
     if status_filter:
@@ -158,43 +167,47 @@ if file:
     if priority_filter:
         filtered = filtered[filtered["priority_norm"].isin(priority_filter)]
 
+    # ================= BUILD =================
     summary = build_summary(filtered)
     cls = build_classification(filtered)
 
-    # ===== REMOVE TOTAL FOR CHART =====
     summary_chart = summary[summary["Module (Epic)"] != "TOTAL"]
 
-    # KPI
+    # ================= KPI =================
     st.subheader("📌 Overview")
+
     k1, k2, k3 = st.columns(3)
     k1.metric("Total Bugs", len(filtered))
     k2.metric("Modules", filtered["module"].nunique())
     k3.metric("Statuses", filtered["status"].nunique())
 
-    # ===== SUMMARY =====
+    # ================= RAW DATA =================
+    st.subheader("📌 Raw Data")
+
+    filtered_display = filtered.reset_index(drop=True)
+    filtered_display.insert(0, "No.", filtered_display.index + 1)
+
+    st.dataframe(filtered_display, use_container_width=True, hide_index=True)
+
+    # ================= SUMMARY =================
     st.subheader("📊 Summary")
+
     summary_display = summary.copy()
     summary_display.insert(0, "No.", range(1, len(summary_display) + 1))
 
-    st.dataframe(
-        summary_display,
-        use_container_width=True,
-        hide_index=True
-    )
+    st.dataframe(summary_display, use_container_width=True, hide_index=True)
 
-    # ===== CLASSIFICATION =====
+    # ================= CLASSIFICATION =================
     st.subheader("📊 Classification")
+
     cls_display = cls.copy()
     cls_display.insert(0, "No.", range(1, len(cls_display) + 1))
 
-    st.dataframe(
-        cls_display,
-        use_container_width=True,
-        hide_index=True
-    )
+    st.dataframe(cls_display, use_container_width=True, hide_index=True)
 
-    # ===== CHARTS =====
+    # ================= CHARTS =================
     st.subheader("📈 Charts")
+
     c1, c2 = st.columns(2)
 
     with c1:
@@ -226,7 +239,7 @@ if file:
         )
         st.plotly_chart(fig2, use_container_width=True)
 
-    # DOWNLOAD
+    # ================= DOWNLOAD =================
     st.download_button(
         "📥 Download Excel Report",
         data=to_excel(summary, cls),
