@@ -137,7 +137,14 @@ if file:
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        module_filter = st.multiselect("Module", sorted(df["module"].unique()))
+        module_list = (
+            df["module"]
+            .dropna()
+            .astype(str)
+            .sort_values()
+            .unique()
+        )
+        module_filter = st.multiselect("Module", module_list)
     with col2:
         status_filter = st.multiselect("Status", sorted(df["status"].unique()))
     with col3:
