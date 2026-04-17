@@ -46,8 +46,15 @@ def clean_data(df):
 
     df.columns = df.columns.str.strip().str.lower()
 
+    # 🔥 FORCE SAFE STATUS
+    if "status" not in df.columns:
+        raise ValueError(f"Missing column STATUS. Available columns: {df.columns.tolist()}")
+
     if "issue type" in df.columns:
         df = df[df["issue type"].astype(str).str.lower().str.contains("bug|defect", na=False)]
+    elif "issuetype" in df.columns:
+        df = df[df["issuetype"].astype(str).str.lower().str.contains("bug|defect", na=False)]
+    # nếu không có thì bỏ qua filter
 
     # module detection
     if "epic name" in df.columns:
@@ -69,6 +76,7 @@ def clean_data(df):
 
     df["module"] = df["module"].apply(map_module)
 
+    df["status"] = df.get("status", "Unknown")
     df["status"] = df["status"].fillna("Unknown").astype(str).str.strip()
 
     df["priority"] = df["priority"].fillna("Unknown")
@@ -143,7 +151,8 @@ file = st.file_uploader("Upload Excel file", type=["xlsx"])
 
 if file:
 
-    df = pd.read_excel(file)
+    xls = pd.ExcelFile(file)
+    df = pd.read_excel(file, sheet_name="Your Jira Issues")
     df = clean_data(df)
 
     # ================= FILTER UI =================
