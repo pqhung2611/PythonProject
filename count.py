@@ -137,7 +137,7 @@ def to_excel(summary, cls):
 
 # ================= STREAMLIT =================
 st.set_page_config(page_title="Jira Bugs Report Dashboard", layout="wide")
-st.title("📊 Jira Bugs Report Dashboard")
+st.title("🐞 Jira Bugs Report Dashboard")
 
 file = st.file_uploader("Upload Excel file", type=["xlsx"])
 
@@ -207,7 +207,7 @@ if file:
     summary_chart = summary[summary["Module (Epic)"] != "TOTAL"]
 
     # ================= OVERVIEW =================
-    st.subheader("📌 Overview")
+    st.subheader("🧭 Overview")
 
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Total Bugs", len(filtered))
@@ -223,44 +223,73 @@ if file:
 
     raw_display = raw_display.rename(columns={
         "module": "Module (Epic)",
-        "status": "Status",
+        "priority": "Priority (Raw)",
         "priority_norm": "Priority",
         "summary": "Title",
+        "status": "Status",
         "assignee": "Assignee"
     })
+
+    raw_display = capitalize_columns(raw_display)
+
+    columns_to_hide = [
+        "Resolution",
+        "Parent",
+        "Epic Link",
+        "Issue Type",
+        "Priority",
+        "Due Date"
+    ]
+
+    raw_display = raw_display.drop(columns=columns_to_hide, errors="ignore")
 
     preferred_cols = [
         "No.",
         "Module (Epic)",
-        "Status",
-        "Priority",
+        "Key",
         "Title",
+        "Status",
+        "Priority (Raw)",
+        "Reporter",
         "Assignee"
     ]
 
     existing_cols = [c for c in preferred_cols if c in raw_display.columns]
 
-    raw_display = raw_display[existing_cols + [
-        c for c in raw_display.columns if c not in existing_cols
-    ]]
+    raw_display = raw_display[
+        existing_cols + [c for c in raw_display.columns if c not in existing_cols]
+        ]
 
     st.dataframe(raw_display, use_container_width=True, hide_index=True)
 
     # ================= OVERALL =================
-    st.subheader("🟦 OVERALL - Summary")
+    st.subheader("🧾 Summary")
 
     summary_display = summary.copy()
     summary_display.insert(0, "No.", range(1, len(summary_display) + 1))
+
+    summary_display = summary_display.rename(columns={
+        "Deploy Uat": "Deploy UAT",
+        "Uat Fpt Testing": "UAT FPT Testing",
+        "Uat Hdb Testing": "UAT HDB Testing",
+        "Deploy Stg": "Deploy STG",
+        "Stg Fpt Testing": "STG FPT Testing",
+        "Stg Hdb Testing": "STG HDB Testing",
+        "Deploy Pilot": "Deploy PILOT",
+        "Pilot Fpt Testing": "PILOT FPT Testing",
+        "Pilot Hdb Testing": "PILOT HDB Testing"
+    })
+
     st.dataframe(summary_display, use_container_width=True, hide_index=True)
 
-    st.subheader("🟦 OVERALL - Classification")
+    st.subheader("🧮 Classification")
 
     cls_display = cls.copy()
     cls_display.insert(0, "No.", range(1, len(cls_display) + 1))
     st.dataframe(cls_display, use_container_width=True, hide_index=True)
 
     # ================= CHARTS =================
-    st.subheader("🟦 OVERALL - Charts")
+    st.subheader("📊 Charts")
 
     c1, c2 = st.columns(2)
 
