@@ -268,7 +268,7 @@ def clean_data(df):
 st.markdown("## 📂 Data Source")
 
 data_source = st.radio(
-    "",
+    "Select Data Source",
     ["📤 Upload Excel", "🔄 Sync Jira Realtime"]
 )
 
