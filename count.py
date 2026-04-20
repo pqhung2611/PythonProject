@@ -10,15 +10,13 @@ from io import StringIO
 
 st.set_page_config(page_title="Jira Bugs Report Dashboard", layout="wide")
 
-email = st.secrets["email"]
-api_token = st.secrets["api_token"]
-domain = st.secrets["domain"]
 jql = "project = DiHDBiz AND type in (NewFeature,Bug) ORDER BY created DESC"
 
 AUTO_REFRESH_INTERVAL = 0  # đơn vị: giây (ví dụ: 60s)
 
 # ================= FETCH JIRA =================
 @st.cache_data(ttl=60, show_spinner=False)
+
 def fetch_jira_data(email, api_token, domain, jql):
 
     url = f"https://{domain}.atlassian.net/rest/api/3/search/jql"
@@ -273,6 +271,10 @@ data_source = st.radio(
     "",
     ["📤 Upload Excel", "🔄 Sync Jira Realtime"]
 )
+
+email = st.secrets.get("email")
+api_token = st.secrets.get("api_token")
+domain = st.secrets.get("domain")
 
 file = None
 
