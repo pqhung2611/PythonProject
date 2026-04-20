@@ -1,0 +1,13 @@
+# Secrets (QUAN TRỌNG)
+.streamlit/secrets.toml
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual env
+venv/
+.env/
+
+# OS files
+.DS_Store
