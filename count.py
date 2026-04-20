@@ -49,13 +49,15 @@ def clean_data(df):
     # 🔥 FORCE SAFE STATUS
     if "status" not in df.columns:
         raise ValueError(f"Missing column STATUS. Available columns: {df.columns.tolist()}")
-
     if "issue type" in df.columns:
         df = df[df["issue type"].astype(str).str.lower().str.contains("bug|defect", na=False)]
     elif "issuetype" in df.columns:
         df = df[df["issuetype"].astype(str).str.lower().str.contains("bug|defect", na=False)]
     # nếu không có thì bỏ qua filter
-
+    if "assignee" not in df.columns:
+        df["assignee"] = "Unknown"
+    if "reporter" not in df.columns:
+        df["reporter"] = "Unknown"
     # module detection
     if "epic name" in df.columns:
         df["module"] = df["epic name"]
@@ -156,7 +158,7 @@ if file:
     df = clean_data(df)
 
     # ================= FILTER UI =================
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4, col5 = st.columns(5)
 
     with col1:
         module_list = sorted(df["module"].dropna().unique())
@@ -167,6 +169,18 @@ if file:
 
     with col3:
         priority_filter = st.multiselect("Priority", sorted(df["priority_norm"].dropna().unique()))
+
+    with col4:
+        assignee_filter = st.multiselect(
+            "Assignee",
+            sorted(df["assignee"].dropna().unique()) if "assignee" in df.columns else []
+        )
+
+    with col5:
+        reporter_filter = st.multiselect(
+            "Reporter",
+            sorted(df["reporter"].dropna().unique()) if "reporter" in df.columns else []
+        )
 
     # ================= ENV FILTER =================
     env_options = st.multiselect(
@@ -205,6 +219,10 @@ if file:
         filtered = filtered[filtered["status"].isin(status_filter)]
     if priority_filter:
         filtered = filtered[filtered["priority_norm"].isin(priority_filter)]
+    if assignee_filter:
+        filtered = filtered[filtered["assignee"].isin(assignee_filter)]
+    if reporter_filter:
+        filtered = filtered[filtered["reporter"].isin(reporter_filter)]
 
     if "Overall" not in env_options:
         filtered = filtered[filtered["status"].isin(env_status_filter)]
