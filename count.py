@@ -3,22 +3,174 @@ import streamlit as st
 import plotly.express as px
 from datetime import date
 from io import BytesIO
+import requests
+from requests.auth import HTTPBasicAuth
+from streamlit_autorefresh import st_autorefresh
+from io import StringIO
+
+st.set_page_config(page_title="Jira Bugs Report Dashboard", layout="wide")
+
+email = st.secrets["email"]
+api_token = st.secrets["api_token"]
+domain = st.secrets["domain"]
+jql = "project = DiHDBiz AND type in (NewFeature,Bug) ORDER BY created DESC"
+
+AUTO_REFRESH_INTERVAL = 0  # đơn vị: giây (ví dụ: 60s)
+
+# ================= FETCH JIRA =================
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_jira_data(email, api_token, domain, jql):
+
+    url = f"https://{domain}.atlassian.net/rest/api/3/search/jql"
+
+    auth = HTTPBasicAuth(email, api_token)
+
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+
+    all_issues = []
+    next_token = None
+
+    while True:
+
+        payload = {
+            "jql": jql,
+            "maxResults": 50,
+            "fields": [
+                "summary",
+                "status",
+                "priority",
+                "assignee",
+                "reporter",
+                "issuetype",
+                "parent",
+                "created",
+                "updated",
+                "customfield_10011",
+                "customfield_10014"
+            ]
+        }
+
+        if next_token:
+            payload["nextPageToken"] = next_token
+
+        response = requests.post(
+            url,
+            headers=headers,
+            json=payload,
+            auth=auth
+        )
+
+        if response.status_code != 200:
+            st.error(response.text)
+            break
+
+        data = response.json()
+
+        issues = data.get("issues", [])
+
+        #st.write(f"Fetched: {len(all_issues) + len(issues)}")
+
+        if not issues:
+            break
+
+        all_issues.extend(issues)
+
+        # 🔥 KEY POINT
+        next_token = data.get("nextPageToken")
+
+        if not next_token:
+            break
+
+        # Thành công sẽ hiển thị trên UI -> Bỏ, không cần
+        #st.success(f"✅ Total fetched: {len(all_issues)}")
+
+    def get_name(val):
+        if isinstance(val, dict):
+            return val.get("name")
+        return val
+
+    def get_user(val):
+        if isinstance(val, dict):
+            return val.get("displayName") or val.get("accountId")
+        return val
+
+    # parse
+    rows = []
+
+    for issue in all_issues:
+
+        # 🔥 Support cả 2 format Jira
+        fields = issue.get("fields", issue)
+
+        def get_nested(field, sub=None):
+            val = fields.get(field)
+            if isinstance(val, dict):
+                return val.get(sub) if sub else val
+            return val
+
+        parent = fields.get("parent") or {}
+
+        rows.append({
+            "key": issue.get("key"),
+            "summary": fields.get("summary"),
+
+            "status": get_name(fields.get("status")),
+            "priority": get_name(fields.get("priority")),
+
+            "assignee": get_user(fields.get("assignee")),
+            "reporter": get_user(fields.get("reporter")),
+
+            # 🔥 lấy epic name
+            "epic name": (parent.get("fields") or {}).get("summary"),
+
+            # 🔥 NEW: parent key
+            "parent key": parent.get("key"),
+            # 🔥 NEW
+            "created": fields.get("created"),
+            "updated": fields.get("updated")
+        })
+
+    return pd.DataFrame(rows)
 
 # ================= CONFIG =================
 
 def load_mapping():
     url = "https://docs.google.com/spreadsheets/d/1psWXuucE_IX_JBi5iG_m96sKuvY5xzEXYLU5BE7ug7w/gviz/tq?tqx=out:csv"
     try:
-        df = pd.read_csv(url)
+        r = requests.get(url)
+        r.raise_for_status()
+
+        df = pd.read_csv(StringIO(r.text))
+
         df.columns = df.columns.str.strip().str.lower()
         return df
-    except:
-        st.warning("Mapping sheet not loaded → using empty mapping")
+
+    except Exception as e:
+        print("Load mapping error:", e)
         return pd.DataFrame(columns=["code", "name"])
 
 mapping_df = load_mapping()
 mapping_df.columns = mapping_df.columns.str.strip().str.lower()
 MODULE_MAP = dict(zip(mapping_df["code"], mapping_df["name"]))
+
+def map_module(row):
+    epic = row.get("epic name")
+    parent_key = row.get("parent key")
+
+    if pd.isna(parent_key) and pd.notna(epic):
+        x = str(epic).strip().upper()
+        return f"{x} - {MODULE_MAP[x]}" if x in MODULE_MAP else x
+
+    if pd.notna(parent_key) and pd.notna(epic):
+        return f"{parent_key} - {epic}"
+
+    if pd.notna(parent_key):
+        return str(parent_key)
+
+    return "No Epic"
 
 STATUS_LIST = [
     "To Do", "IN DEV", "Deploy UAT", "UAT FPT Testing", "UAT HDB Testing",
@@ -44,41 +196,63 @@ def capitalize_columns(df):
 # ================= CLEAN DATA =================
 def clean_data(df):
 
+    # 🔥 chuẩn hoá column
     df.columns = df.columns.str.strip().str.lower()
 
-    # 🔥 FORCE SAFE STATUS
+    # 🔥 chuẩn hoá null
+    df = df.replace(["nan", "None", ""], pd.NA)
+
+    # 🔥 đảm bảo đủ cột
+    for col in ["parent key", "epic name", "epic link", "parent"]:
+        if col not in df.columns:
+            df[col] = pd.NA
+
+    # 🔥 build parent key (1 lần duy nhất)
+    df["parent key"] = (
+        df["parent key"]
+        .fillna(df["epic link"])
+        .fillna(df["parent"])
+    )
+
+    # 🔥 fill epic name từ mapping nếu thiếu
+    df["epic name"] = df["epic name"].fillna(
+        df["parent key"].map(lambda x: MODULE_MAP.get(str(x).upper()) if pd.notna(x) else None)
+    )
+
+    # 🔥 map module chuẩn
+    def map_module(row):
+        parent_key = row["parent key"]
+        epic = row["epic name"]
+
+        if pd.notna(parent_key) and pd.notna(epic):
+            return f"{parent_key} - {epic}"
+
+        if pd.notna(parent_key):
+            return str(parent_key)
+
+        if pd.notna(epic):
+            return str(epic)
+
+        return "No Epic"
+
+    df["module"] = df.apply(map_module, axis=1)
+
+    # ================= OTHER CLEAN =================
+
     if "status" not in df.columns:
         raise ValueError(f"Missing column STATUS. Available columns: {df.columns.tolist()}")
+
     if "issue type" in df.columns:
         df = df[df["issue type"].astype(str).str.lower().str.contains("bug|defect", na=False)]
     elif "issuetype" in df.columns:
         df = df[df["issuetype"].astype(str).str.lower().str.contains("bug|defect", na=False)]
-    # nếu không có thì bỏ qua filter
+
     if "assignee" not in df.columns:
         df["assignee"] = "Unknown"
+
     if "reporter" not in df.columns:
         df["reporter"] = "Unknown"
-    # module detection
-    if "epic name" in df.columns:
-        df["module"] = df["epic name"]
-    elif "parent summary" in df.columns:
-        df["module"] = df["parent summary"]
-    elif "epic link" in df.columns:
-        df["module"] = df["epic link"]
-    else:
-        df["module"] = df.get("parent", pd.NA)
 
-    df["module"] = df["module"].replace(["nan", "None", ""], pd.NA)
-
-    def map_module(x):
-        if pd.isna(x):
-            return "No Epic"
-        x = str(x).strip().upper()
-        return f"{x} - {MODULE_MAP[x]}" if x in MODULE_MAP else x
-
-    df["module"] = df["module"].apply(map_module)
-
-    df["status"] = df.get("status", "Unknown")
     df["status"] = df["status"].fillna("Unknown").astype(str).str.strip()
 
     df["priority"] = df["priority"].fillna("Unknown")
@@ -92,6 +266,78 @@ def clean_data(df):
 
     return df
 
+# ================= Bổ sung Jira =================
+st.markdown("## 📂 Data Source")
+
+data_source = st.radio(
+    "",
+    ["📤 Upload Excel", "🔄 Sync Jira Realtime"]
+)
+
+file = None
+
+df = pd.DataFrame()
+
+if data_source == "📤 Upload Excel":
+    file = st.file_uploader("📤 Upload Excel file", type=["xlsx"], key="upload_excel")
+
+    if file is not None:
+
+        xls = pd.ExcelFile(file)
+        target_sheet = "Your Jira Issues"
+
+        if target_sheet in xls.sheet_names:
+
+            temp_df = pd.read_excel(file, sheet_name=target_sheet, header=None)
+
+            # 🔥 tìm dòng chứa header (có chữ "status")
+            header_row = None
+            for i, row in temp_df.iterrows():
+                row_str = row.astype(str).str.lower()
+                if row_str.str.contains("status").any():
+                    header_row = i
+                    break
+
+            if header_row is None:
+                st.error("❌ Không tìm thấy header chứa STATUS")
+                st.stop()
+
+            # 🔥 đọc lại với header đúng
+            df = pd.read_excel(
+                file,
+                sheet_name=target_sheet,
+                skiprows=header_row,
+                header=0
+            )
+
+        else:
+            st.error("❌ Không tìm thấy sheet 'Your Jira Issues'")
+            st.stop()
+
+elif data_source == "🔄 Sync Jira Realtime":
+    df = st.session_state.get("jira_data", pd.DataFrame())
+
+if AUTO_REFRESH_INTERVAL > 0:
+    st_autorefresh(interval=AUTO_REFRESH_INTERVAL * 1000, key="auto_refresh")
+
+if data_source == "🔄 Sync Jira Realtime":
+
+    st.subheader("🔄 Jira Realtime Data")
+
+    if st.button("🚀 Fetch Data from Jira"):
+        with st.spinner("⏳ Uploading data from Jira..."):
+            df = fetch_jira_data(email, api_token, domain, jql)
+            st.session_state["jira_data"] = df
+
+        st.success(f"✅ Loaded {len(df)} records")
+
+    df = st.session_state.get("jira_data", pd.DataFrame())
+
+    if st.button("♻️ Clear Cache"):
+        st.cache_data.clear()
+        st.session_state.pop("jira_data", None)  # 🔥 xoá data đã lưu
+        st.success("✅ Cache cleared!")
+        st.rerun()  # 🔥 reload app
 
 # ================= SUMMARY =================
 def build_summary(df):
@@ -146,15 +392,10 @@ def to_excel(summary, cls):
 
 
 # ================= STREAMLIT =================
-st.set_page_config(page_title="Jira Bugs Report Dashboard", layout="wide")
 st.title("🐞 Jira Bugs Report Dashboard")
 
-file = st.file_uploader("Upload Excel file", type=["xlsx"])
+if not df.empty:
 
-if file:
-
-    xls = pd.ExcelFile(file)
-    df = pd.read_excel(file, sheet_name="Your Jira Issues")
     df = clean_data(df)
 
     # ================= FILTER UI =================
@@ -265,7 +506,9 @@ if file:
         "Epic Link",
         "Issue Type",
         "Priority",
-        "Due Date"
+        "Due Date",
+        "Parent Key",
+        "Epic Name"
     ]
 
     raw_display = raw_display.drop(columns=columns_to_hide, errors="ignore")
