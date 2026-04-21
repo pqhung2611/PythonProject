@@ -10,7 +10,7 @@ from io import StringIO
 
 st.set_page_config(page_title="Jira Bugs Report Dashboard", layout="wide")
 
-jql = "project = DiHDBiz AND type in (NewFeature,Bug) ORDER BY created DESC"
+jql = "project = DiHDBiz AND type in (NewFeature,Bug,Task) ORDER BY created DESC"
 
 AUTO_REFRESH_INTERVAL = 0  # đơn vị: giây (ví dụ: 60s)
 
@@ -120,6 +120,11 @@ def fetch_jira_data(email, api_token, domain, jql):
 
             "assignee": get_user(fields.get("assignee")),
             "reporter": get_user(fields.get("reporter")),
+            "issue_type": (
+            fields.get("issuetype", {}).get("name")
+            if isinstance(fields.get("issuetype"), dict)
+            else fields.get("issuetype")
+            ),
 
             # 🔥 lấy epic name
             "epic name": (parent.get("fields") or {}).get("summary"),
@@ -217,6 +222,16 @@ def clean_data(df):
         df["parent key"].map(lambda x: MODULE_MAP.get(str(x).upper()) if pd.notna(x) else None)
     )
 
+    # 🔥 ưu tiên Excel trước
+    if "issue type" in df.columns:
+        df["issue_type"] = df["issue type"]
+
+    elif "issuetype" in df.columns:
+        df["issue_type"] = df["issuetype"]
+
+    # ❌ XÓA cột cũ để tránh duplicate
+    df = df.drop(columns=["issue type", "issuetype"], errors="ignore")
+
     # 🔥 map module chuẩn
     def map_module(row):
         parent_key = row["parent key"]
@@ -239,11 +254,6 @@ def clean_data(df):
 
     if "status" not in df.columns:
         raise ValueError(f"Missing column STATUS. Available columns: {df.columns.tolist()}")
-
-    if "issue type" in df.columns:
-        df = df[df["issue type"].astype(str).str.lower().str.contains("bug|defect", na=False)]
-    elif "issuetype" in df.columns:
-        df = df[df["issuetype"].astype(str).str.lower().str.contains("bug|defect", na=False)]
 
     if "assignee" not in df.columns:
         df["assignee"] = "Unknown"
@@ -394,14 +404,15 @@ def to_excel(summary, cls):
 
 
 # ================= STREAMLIT =================
-st.title("🐞 Jira Bugs Report Dashboard")
+
 
 if not df.empty:
-
+    st.title("🐞 Jira Bugs Report Dashboard")
+    st.markdown("### 🔎 Filters")
     df = clean_data(df)
 
     # ================= FILTER UI =================
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
 
     with col1:
         module_list = sorted(df["module"].dropna().unique())
@@ -423,6 +434,13 @@ if not df.empty:
         reporter_filter = st.multiselect(
             "Reporter",
             sorted(df["reporter"].dropna().unique()) if "reporter" in df.columns else []
+        )
+
+    with col6:
+        issue_type_filter = st.multiselect(
+            "Issue Type",
+            sorted(df["issue_type"].dropna().unique()) if "issue_type" in df.columns else [],
+            default=["Bug"]
         )
 
     # ================= ENV FILTER =================
@@ -466,6 +484,8 @@ if not df.empty:
         filtered = filtered[filtered["assignee"].isin(assignee_filter)]
     if reporter_filter:
         filtered = filtered[filtered["reporter"].isin(reporter_filter)]
+    if issue_type_filter:
+        filtered = filtered[filtered["issue_type"].isin(issue_type_filter)]
 
     if "Overall" not in env_options:
         filtered = filtered[filtered["status"].isin(env_status_filter)]
@@ -493,11 +513,12 @@ if not df.empty:
 
     raw_display = raw_display.rename(columns={
         "module": "Module (Epic)",
-        "priority": "Priority (Raw)",
-        "priority_norm": "Priority",
+        "priority": "Priority",
+        "priority_norm": "Priority (Raw)",
         "summary": "Title",
         "status": "Status",
-        "assignee": "Assignee"
+        "assignee": "Assignee",
+        "issue_type": "Issue Type"
     })
 
     raw_display = capitalize_columns(raw_display)
@@ -506,24 +527,27 @@ if not df.empty:
         "Resolution",
         "Parent",
         "Epic Link",
-        "Issue Type",
-        "Priority",
+        "Priority (Raw)",
         "Due Date",
         "Parent Key",
-        "Epic Name"
+        "Epic Name",
+        "Due_Date"
     ]
 
     raw_display = raw_display.drop(columns=columns_to_hide, errors="ignore")
 
     preferred_cols = [
         "No.",
-        "Module (Epic)",
         "Key",
         "Title",
         "Status",
-        "Priority (Raw)",
+        "Priority",
         "Reporter",
-        "Assignee"
+        "Assignee",
+        "Created",
+        "Updated",
+        "Module (Epic)",
+        "Issue Type"
     ]
 
     existing_cols = [c for c in preferred_cols if c in raw_display.columns]
