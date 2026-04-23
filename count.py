@@ -176,7 +176,7 @@ def map_module(row):
     return "No Epic"
 
 STATUS_LIST = [
-    "To Do", "IN DEV", "Deploy UAT", "UAT FPT Testing", "UAT HDB Testing",
+    "To Do", "IN DEV", "Deploy UAT", "UAT FPT Testing", "UAT HDB Testing", "STG FPT MERGE REQUEST", "STG HDB MERGE CODE",
     "Deploy STG", "STG FPT Testing", "STG HDB Testing",
     "Deploy Pilot", "PILOT FPT Testing", "PILOT HDB Testing",
     "Done", "Cancel", "Pending"
@@ -455,7 +455,7 @@ if not df.empty:
     ]
 
     STG_STATUS = [
-        "Deploy STG", "STG FPT Testing", "STG HDB Testing"
+        "STG FPT MERGE REQUEST", "STG HDB MERGE CODE", "Deploy STG", "STG FPT Testing", "STG HDB Testing"
     ]
 
     PILOT_STATUS = [
@@ -573,7 +573,9 @@ if not df.empty:
         "Stg Hdb Testing": "STG HDB Testing",
         "Deploy Pilot": "Deploy PILOT",
         "Pilot Fpt Testing": "PILOT FPT Testing",
-        "Pilot Hdb Testing": "PILOT HDB Testing"
+        "Pilot Hdb Testing": "PILOT HDB Testing",
+        "Stg Fpt Merge Request": "STG FPT Merge Request",
+        "Stg Hdb Merge Code": "STG HDB Merge Code",
     })
 
     st.dataframe(summary_display, use_container_width=True, hide_index=True)
